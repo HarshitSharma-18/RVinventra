@@ -1,0 +1,49 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-headline: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+
+  --color-primary: #426900;
+  --color-primary-container: #84c225;
+  --color-on-primary-container: #2e4b00;
+  --color-secondary: #bb0016;
+  --color-on-secondary: #ffffff;
+  --color-surface: #f9f9f9;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f3f3f3;
+  --color-surface-container-high: #e8e8e8;
+  --color-surface-container-highest: #e2e2e2;
+  --color-on-surface: #1a1c1c;
+  --color-on-surface-variant: #424937;
+  --color-outline-variant: #c2cab1;
+  --color-error-container: #ffdad6;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-on-surface antialiased;
+    font-feature-settings: "ss01", "ss02", "cv01", "cv02";
+  }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.glass-panel {
+  @apply bg-surface-container-lowest/80 backdrop-blur-xl;
+}
+
+.editorial-shadow {
+  box-shadow: 0 8px 24px -4px rgba(26, 28, 28, 0.06);
+}
+
+.ambient-glow {
+  box-shadow: 0 8px 24px -4px rgba(26, 28, 28, 0.12);
+}
