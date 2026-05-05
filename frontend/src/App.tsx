@@ -258,8 +258,8 @@ function AnalyzerScreen({ setScreen, transactions, products }: { setScreen: (s: 
               key={range}
               onClick={() => setTimeRange(range)}
               className={`px-5 py-2.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${timeRange === range
-                  ? 'bg-primary text-white ambient-glow scale-[1.05]'
-                  : 'bg-surface-container-high text-on-surface-variant/60 hover:bg-surface-container-highest'
+                ? 'bg-primary text-white ambient-glow scale-[1.05]'
+                : 'bg-surface-container-high text-on-surface-variant/60 hover:bg-surface-container-highest'
                 }`}
             >
               {range}
@@ -1246,7 +1246,7 @@ function InventoryScreen({
       </header>
 
       <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
-        <button 
+        <button
           onClick={() => setShowLowStockOnly(false)}
           className={`shrink-0 w-36 h-36 p-5 rounded-[2rem] editorial-shadow flex flex-col justify-between transition-all active:scale-95 ${!showLowStockOnly ? 'bg-primary text-white ambient-glow' : 'bg-surface-container-lowest'}`}
         >
@@ -1259,7 +1259,7 @@ function InventoryScreen({
           </div>
         </button>
 
-        <button 
+        <button
           onClick={() => setShowLowStockOnly(true)}
           className={`shrink-0 w-36 h-36 p-5 rounded-[2rem] editorial-shadow flex flex-col justify-between transition-all active:scale-95 border-b-4 ${showLowStockOnly ? 'bg-secondary text-white ambient-glow border-white/20' : 'bg-surface-container-lowest border-secondary/20'}`}
         >
@@ -1700,7 +1700,6 @@ function ProfileScreen({ setScreen, profile, setProfile }: { setScreen: (s: Scre
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': profile.id,
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(updatedProfile)
@@ -1871,7 +1870,6 @@ export default function App() {
       try {
         const token = localStorage.getItem('inventrax_token');
         const headers = {
-          'x-user-id': userId,
           'Authorization': `Bearer ${token}`
         };
         const [invRes, billsRes, profileRes] = await Promise.all([
@@ -1945,11 +1943,14 @@ export default function App() {
 
   const addProduct = async (newProduct: Product) => {
     try {
-      const userId = localStorage.getItem('inventrax_user_id');
+      const token = localStorage.getItem('inventrax_token');
       const payloadId = newProduct.id.startsWith('prod-') ? undefined : newProduct.id;
       const res = await fetch(`${API_BASE_URL}/api/inventory`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId! },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           id: payloadId,
           name: newProduct.name,
@@ -2014,7 +2015,7 @@ export default function App() {
 
   const addTransaction = async (newTx: Transaction) => {
     try {
-      const userId = localStorage.getItem('inventrax_user_id');
+      const token = localStorage.getItem('inventrax_token');
       const payload = {
         customerName: newTx.customerName,
         customerPhone: newTx.customerContact,
@@ -2029,7 +2030,10 @@ export default function App() {
 
       const res = await fetch(`${API_BASE_URL}/api/bills`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId! },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -2071,10 +2075,12 @@ export default function App() {
 
   const deleteProduct = async (id: string) => {
     try {
-      const userId = localStorage.getItem('inventrax_user_id');
+      const token = localStorage.getItem('inventrax_token');
       await fetch(`${API_BASE_URL}/api/inventory/${id}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': userId! }
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       localStorage.removeItem(`inventrax_img_${id}`);
       setProducts(prev => prev.filter(p => p.id !== id));
@@ -2085,12 +2091,15 @@ export default function App() {
   };
   const toggleAvailability = async (id: string) => {
     try {
-      const userId = localStorage.getItem('inventrax_user_id');
+      const token = localStorage.getItem('inventrax_token');
       const product = products.find(p => p.id === id);
       if (!product) return;
       await fetch(`${API_BASE_URL}/api/inventory`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId! },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           id: product.id,
           name: product.name,

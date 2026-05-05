@@ -1,10 +1,12 @@
-const { supabase } = require('../config/db');
+// Removed global supabase import in favor of req.supabase for verified user isolation
 // Removed ownership module in favor of database user_id column
 
 exports.getBills = async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'];
-    const { data: txs, error } = await supabase
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { data: txs, error } = await req.supabase
       .from('transactions')
       .select('*, transaction_items(quantity, price, items(id, name, category))')
       .eq('user_id', userId)
@@ -39,7 +41,8 @@ exports.getBills = async (req, res) => {
 exports.saveBill = async (req, res) => {
   try {
     const billData = req.body;
-    const userId = req.headers['x-user-id'];
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     
     // 1. Insert transaction
     const { data: txData, error: txError } = await req.supabase
@@ -70,7 +73,7 @@ exports.saveBill = async (req, res) => {
 
     // 3. Atomically Deduct stock bounds using our isolated RPC function call
     for (const item of billData.items) {
-       await supabase.rpc('deduct_stock', { p_item_id: item.inventoryId, p_quantity: item.quantity });
+       await req.supabase.rpc('deduct_stock', { p_item_id: item.inventoryId, p_quantity: item.quantity });
     }
 
     return res.status(200).json({ success: true, transactionId });
