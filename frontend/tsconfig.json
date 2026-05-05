@@ -25,6 +25,6 @@
     "types": [
       "vite/client"
     ]
-  },
-  "extends": "expo/tsconfig.base"
+  }
+  // "extends": "expo/tsconfig.base"
 }
