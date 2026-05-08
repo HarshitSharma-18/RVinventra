@@ -52,8 +52,7 @@ import {
   Cell
 } from 'recharts';
 import { Screen, Product, Transaction } from './types';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+import { supabase } from './lib/supabase';
 
 
 function Layout({ children, currentScreen, setScreen, onAddNew, profile }: {
@@ -1568,29 +1567,28 @@ function AuthScreen({ onLogin }: { onLogin: (user: any, session: any) => void })
 
     setLoading(true);
     try {
-      const url = isLogin ? `${API_BASE_URL}/api/auth/login` : `${API_BASE_URL}/api/auth/signup`;
-      const body = isLogin ? { email, password } : { name, email, password };
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        alert(data.error || 'Authentication failed');
+      if (isLogin) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+        onLogin(data.user, data.session);
       } else {
-        if (!isLogin) {
-          alert('Account created successfully! Please sign in with your new credentials.');
-          setIsLogin(true);
-          setPassword('');
-        } else {
-          onLogin(data.user, data.session);
-        }
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { name }
+          }
+        });
+        if (error) throw error;
+        alert('Account created successfully! Please sign in with your new credentials.');
+        setIsLogin(true);
+        setPassword('');
       }
-    } catch (err) {
-      alert("Network error. Please make sure backend is running.");
+    } catch (err: any) {
+      alert(err.message || "Authentication failed");
     } finally {
       setLoading(false);
     }
@@ -1686,40 +1684,52 @@ function ProfileScreen({ setScreen, profile, setProfile }: { setScreen: (s: Scre
     try {
       // 1. Upload photo if it's new (base64)
       if (localProfile.photo_url && localProfile.photo_url.startsWith('data:image')) {
-        const res = await fetch(`${API_BASE_URL}/api/upload`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: profile.id, type: 'profile', imageBase64: localProfile.photo_url })
-        });
-        const data = await res.json();
-        if (data.url) updatedProfile.photo_url = data.url;
-      }
-
-      // 2. Save entire profile to backend
-      const res = await fetch(`${API_BASE_URL}/api/profile`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(updatedProfile)
-      });
-
-      if (res.ok) {
-        setProfile(updatedProfile);
-        localStorage.setItem(`inventrax_profile_${profile.id}`, JSON.stringify(updatedProfile));
-        setIsEditing(false);
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        alert("Failed to save profile: " + (errData.error || res.statusText));
-        if (res.status === 401) {
-          localStorage.removeItem('inventrax_logged_in');
-          window.location.reload();
+        const base64Data = localProfile.photo_url.replace(/^data:image\/\w+;base64,/, "");
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
         }
+        const byteArray = new Uint8Array(byteNumbers);
+        const fileName = `profile_${profile.id}_${Date.now()}.png`;
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('images')
+          .upload(fileName, byteArray, {
+            contentType: 'image/png',
+            upsert: true
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('images')
+          .getPublicUrl(fileName);
+        
+        updatedProfile.photo_url = publicUrl;
       }
+
+      // 2. Save entire profile to database
+      const { error: dbError } = await supabase
+        .from('profiles')
+        .upsert({
+          id: profile.id,
+          name: updatedProfile.name,
+          email: updatedProfile.email,
+          phone: updatedProfile.phone,
+          role: updatedProfile.role,
+          address: updatedProfile.address,
+          photo_url: updatedProfile.photo_url
+        });
+
+      if (dbError) throw dbError;
+
+      setProfile(updatedProfile);
+      localStorage.setItem(`inventrax_profile_${profile.id}`, JSON.stringify(updatedProfile));
+      setIsEditing(false);
     } catch (e: any) {
       console.error(e);
-      alert("Network error: " + e.message);
+      alert("Error: " + e.message);
     } finally {
       setIsSaving(false);
     }
@@ -1868,30 +1878,34 @@ export default function App() {
         return;
       }
       try {
-        const token = localStorage.getItem('inventrax_token');
-        const headers = {
-          'Authorization': `Bearer ${token}`
-        };
         const [invRes, billsRes, profileRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/inventory`, { headers }),
-          fetch(`${API_BASE_URL}/api/bills`, { headers }),
-          fetch(`${API_BASE_URL}/api/profile`, { headers })
+          supabase
+            .from('items')
+            .select('*')
+            .eq('user_id', userId)
+            .order('name'),
+          supabase
+            .from('transactions')
+            .select('*, transaction_items(quantity, price, items(id, name, category))')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single()
         ]);
-        if (invRes.status === 401 || billsRes.status === 401 || profileRes.status === 401) {
-          throw new Error('Unauthorized');
-        }
 
-        const invData = await invRes.json();
-        const billsData = await billsRes.json();
+        if (invRes.error) throw invRes.error;
+        if (billsRes.error) throw billsRes.error;
 
-        if (profileRes.ok) {
-          const profileData = await profileRes.json();
-          if (profileData && profileData.id) {
-            setProfile(profileData);
-            localStorage.setItem(`inventrax_profile_${userId}`, JSON.stringify(profileData));
-          }
-        } else if (profileRes.status === 404) {
-          console.log("No profile found for this user yet.");
+        const invData = invRes.data || [];
+        const billsData = billsRes.data || [];
+
+        if (profileRes.data) {
+          const profileData = profileRes.data;
+          setProfile(profileData);
+          localStorage.setItem(`inventrax_profile_${userId}`, JSON.stringify(profileData));
         }
 
         const loadedProducts = invData.map((item: any) => {
@@ -1903,8 +1917,8 @@ export default function App() {
             price: item.price,
             unit: 'ea',
             image: savedImg || item.image || 'https://lh3.googleusercontent.com/aida-public/AB6AXuCoeljB0TS97WbD6cnbBN4VkyK0CCJQuKCSJBZz3c35IE5Gz5lDbZMDJDDxhz79-aAb4IjfOPA5K4dzsX612PHmyE3Q2K1mQBHS8bIlURGXYVWVshZjL1Ro4NzCwp-zRo_5q5LiOFAW9Q0H-d81En1qu6I1-DKsu3shtCgOaIim6dq4Gm9U-XoQWlsCkz9ifT-wZhF330gmg-zpvUOQA2MP_Asy4sMEMIbQILHWBZT_97goDo-uTdxpmKrfhlY_W7Gp9Vdm8DU0wg',
-            stock: item.quantity,
-            status: item.quantity === 0 ? 'Out of Stock' : (item.quantity <= 10 ? 'Low Stock' : 'In Stock'),
+            stock: item.stock,
+            status: item.stock === 0 ? 'Out of Stock' : (item.stock <= 10 ? 'Low Stock' : 'In Stock'),
             sku: `SKU-${item.id.slice ? item.id.slice(0, 6).toUpperCase() : Math.random().toString(36).substr(2, 6).toUpperCase()}`,
             available: item.available
           };
@@ -1912,22 +1926,22 @@ export default function App() {
         setProducts(loadedProducts);
 
         const loadedTransactions = billsData.map((tx: any) => {
-          const date = new Date(tx.timestamp);
+          const date = new Date(tx.created_at);
           return {
             id: tx.id,
-            customerName: tx.customerName || 'Walk-in Customer',
-            customerContact: tx.customerPhone || '',
+            customerName: tx.customer_name || 'Walk-in Customer',
+            customerContact: tx.contact_number || '',
             date: date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
             time: `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`,
-            amount: tx.totalAmount,
-            method: tx.paymentMode,
-            itemsCount: tx.items?.length || 0,
+            amount: tx.total_amount,
+            method: tx.payment_method,
+            itemsCount: tx.transaction_items?.length || 0,
             status: 'Completed',
-            items: (tx.items || []).map((i: any) => ({
-              productId: i.inventoryId,
-              name: i.name,
-              quantity: i.quantity,
-              price: i.rate
+            items: (tx.transaction_items || []).map((ti: any) => ({
+              productId: ti.items?.id,
+              name: ti.items?.name || 'Unknown Item',
+              quantity: ti.quantity,
+              price: ti.price
             }))
           };
         });
@@ -1943,45 +1957,59 @@ export default function App() {
 
   const addProduct = async (newProduct: Product) => {
     try {
-      const token = localStorage.getItem('inventrax_token');
-      const payloadId = newProduct.id.startsWith('prod-') ? undefined : newProduct.id;
-      const res = await fetch(`${API_BASE_URL}/api/inventory`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          id: payloadId,
-          name: newProduct.name,
-          category: newProduct.category,
-          price: newProduct.price,
-          quantity: newProduct.stock,
-          available: newProduct.available
-        })
-      });
-      const savedItem = await res.json();
+      const userId = localStorage.getItem('inventrax_user_id');
+      if (!userId) throw new Error('Not logged in');
 
-      if (!res.ok) {
-        alert("Failed to save item: " + (savedItem.error || 'Unknown error'));
-        return;
+      const itemPayload = {
+        name: newProduct.name,
+        category: newProduct.category,
+        price: newProduct.price,
+        stock: newProduct.stock,
+        available: newProduct.available,
+        user_id: userId
+      };
+
+      let res;
+      if (newProduct.id.startsWith('prod-')) {
+        // Insert new item without sending the temporary 'prod-' ID
+        res = await supabase.from('items').insert(itemPayload).select().single();
+      } else {
+        // Update existing item using its real UUID
+        res = await supabase.from('items').update(itemPayload).eq('id', newProduct.id).select().single();
       }
 
-      const realId = savedItem.id || newProduct.id;
+      if (res.error) throw res.error;
+      const savedItem = res.data;
+      const realId = savedItem.id;
 
       let finalImageUrl = newProduct.image;
       if (newProduct.image && newProduct.image.startsWith('data:image')) {
         try {
-          const uploadRes = await fetch(`${API_BASE_URL}/api/upload`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: realId, type: 'item', imageBase64: newProduct.image })
-          });
-          const uploadData = await uploadRes.json();
-          if (uploadData.url) {
-            finalImageUrl = uploadData.url;
-            localStorage.setItem(`inventrax_img_${realId}`, finalImageUrl);
+          const base64Data = newProduct.image.replace(/^data:image\/\w+;base64,/, "");
+          const byteCharacters = atob(base64Data);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
           }
+          const byteArray = new Uint8Array(byteNumbers);
+          const fileName = `item_${realId}_${Date.now()}.png`;
+
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('images')
+            .upload(fileName, byteArray, {
+              contentType: 'image/png',
+              upsert: true
+            });
+
+          if (uploadError) throw uploadError;
+
+          const { data: { publicUrl } } = supabase.storage
+            .from('images')
+            .getPublicUrl(fileName);
+          
+          finalImageUrl = publicUrl;
+          await supabase.from('items').update({ image: finalImageUrl }).eq('id', realId);
+          localStorage.setItem(`inventrax_img_${realId}`, finalImageUrl);
         } catch (e) { console.error('Upload failed', e) }
       } else if (newProduct.image) {
         localStorage.setItem(`inventrax_img_${realId}`, newProduct.image);
@@ -2015,56 +2043,62 @@ export default function App() {
 
   const addTransaction = async (newTx: Transaction) => {
     try {
-      const token = localStorage.getItem('inventrax_token');
-      const payload = {
-        customerName: newTx.customerName,
-        customerPhone: newTx.customerContact,
-        totalAmount: newTx.amount,
-        paymentMode: newTx.method,
-        items: newTx.items.map(item => ({
-          inventoryId: item.productId,
-          quantity: item.quantity,
-          rate: item.price
-        }))
-      };
+      const userId = localStorage.getItem('inventrax_user_id');
+      if (!userId) throw new Error('Not logged in');
 
-      const res = await fetch(`${API_BASE_URL}/api/bills`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
+      // 1. Insert transaction
+      const { data: txData, error: txError } = await supabase
+        .from('transactions')
+        .insert({
+          customer_name: newTx.customerName,
+          contact_number: newTx.customerContact,
+          total_amount: newTx.amount,
+          payment_method: newTx.method,
+          user_id: userId
+        })
+        .select('id')
+        .single();
 
-      if (!res.ok || !data.success) {
-        alert("Failed to process transaction: " + (data.error || 'Unknown error'));
-        return;
+      if (txError) throw txError;
+      const transactionId = txData.id;
+
+      // 2. Insert transaction items
+      const lineItems = newTx.items.map(item => ({
+        transaction_id: transactionId,
+        item_id: item.productId,
+        quantity: item.quantity,
+        price: item.price
+      }));
+
+      const { error: lineError } = await supabase.from('transaction_items').insert(lineItems);
+      if (lineError) throw lineError;
+
+      // 3. Update stock (calling the RPC function like the backend did)
+      for (const item of newTx.items) {
+        await supabase.rpc('deduct_stock', { p_item_id: item.productId, p_quantity: item.quantity });
       }
 
-      if (data.success) {
-        newTx.id = data.transactionId;
-        setTransactions(prev => [newTx, ...prev]);
-        setProducts(prevProducts => prevProducts.map(product => {
-          const soldItem = newTx.items.find(item => item.productId === product.id);
-          if (soldItem) {
-            const newStock = Math.max(0, product.stock - soldItem.quantity);
-            let newStatus: 'In Stock' | 'Low Stock' | 'Out of Stock' = 'In Stock';
-            if (newStock === 0) newStatus = 'Out of Stock';
-            else if (newStock <= 10) newStatus = 'Low Stock';
+      newTx.id = transactionId;
+      setTransactions(prev => [newTx, ...prev]);
+      setProducts(prevProducts => prevProducts.map(product => {
+        const soldItem = newTx.items.find(item => item.productId === product.id);
+        if (soldItem) {
+          const newStock = Math.max(0, product.stock - soldItem.quantity);
+          let newStatus: 'In Stock' | 'Low Stock' | 'Out of Stock' = 'In Stock';
+          if (newStock === 0) newStatus = 'Out of Stock';
+          else if (newStock <= 10) newStatus = 'Low Stock';
 
-            return {
-              ...product,
-              stock: newStock,
-              status: newStatus
-            };
-          }
-          return product;
-        }));
-      }
-    } catch (err) {
+          return {
+            ...product,
+            stock: newStock,
+            status: newStatus
+          };
+        }
+        return product;
+      }));
+    } catch (err: any) {
       console.error(err);
+      alert("Failed to process transaction: " + err.message);
     }
   };
 
@@ -2075,13 +2109,8 @@ export default function App() {
 
   const deleteProduct = async (id: string) => {
     try {
-      const token = localStorage.getItem('inventrax_token');
-      await fetch(`${API_BASE_URL}/api/inventory/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const { error } = await supabase.from('items').delete().eq('id', id);
+      if (error) throw error;
       localStorage.removeItem(`inventrax_img_${id}`);
       setProducts(prev => prev.filter(p => p.id !== id));
       setMenuOpen(null);
@@ -2089,44 +2118,28 @@ export default function App() {
       console.error(err);
     }
   };
+
   const toggleAvailability = async (id: string) => {
     try {
-      const token = localStorage.getItem('inventrax_token');
       const product = products.find(p => p.id === id);
       if (!product) return;
-      await fetch(`${API_BASE_URL}/api/inventory`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          id: product.id,
-          name: product.name,
-          category: product.category,
-          price: product.price,
-          quantity: product.stock,
-          available: !product.available
-        })
-      });
-      setProducts(prev => prev.map(p =>
-        p.id === id ? { ...p, available: !p.available } : p
-      ));
+      const { error } = await supabase.from('items').update({ available: !product.available }).eq('id', id);
+      if (error) throw error;
+      setProducts(prev => prev.map(p => p.id === id ? { ...p, available: !p.available } : p));
     } catch (err) {
       console.error(err);
     }
   };
-
   if (!isLoggedIn) {
     return (
       <AuthScreen
-        onLogin={async (user, session) => {
-          if (session) {
-            localStorage.setItem('inventrax_token', session.access_token);
-          }
+        onLogin={(user, session) => {
           setIsLoggedIn(true);
           localStorage.setItem('inventrax_logged_in', 'true');
           localStorage.setItem('inventrax_user_id', user.id);
+          if (session) {
+            localStorage.setItem('inventrax_token', session.access_token);
+          }
         }}
       />
     );
